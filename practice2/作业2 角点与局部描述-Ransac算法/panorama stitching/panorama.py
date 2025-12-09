@@ -53,7 +53,23 @@ def harris_corners(img, window_size=3, k=0.04):
     dy = filters.sobel_h(img)
 
     ### YOUR CODE HERE
+    # 2. Compute products of derivatives (I_x^2, I_y^2, I_xy) at each pixel
+    Ixx = dx * dx
+    Iyy = dy * dy
+    Ixy = dx * dy
     
+    # 3. Compute matrix M at each pixel using window function
+    # Sum over window: w(x,y) * [I_x^2, I_xy; I_xy, I_y^2]
+    Sxx = convolve(Ixx, window, mode='constant', cval=0)
+    Syy = convolve(Iyy, window, mode='constant', cval=0)
+    Sxy = convolve(Ixy, window, mode='constant', cval=0)
+    
+    # 4. Compute corner response R = Det(M) - k(Trace(M)^2)
+    # Det(M) = Sxx * Syy - Sxy^2
+    # Trace(M) = Sxx + Syy
+    det_M = Sxx * Syy - Sxy * Sxy
+    trace_M = Sxx + Syy
+    response = det_M - k * (trace_M ** 2)
     ### END YOUR CODE
 
     return response
@@ -80,7 +96,19 @@ def simple_descriptor(patch):
     feature = []
 
     ### YOUR CODE HERE
+    # Normalize the patch to have mean 0 and std 1
+    patch_flat = patch.flatten()
+    mean = np.mean(patch_flat)
+    std = np.std(patch_flat)
     
+    # If denominator is zero, divide by 1 instead
+    if std == 0:
+        std = 1
+    
+    # Normalize: (x - mean) / std
+    normalized = (patch_flat - mean) / std
+    
+    feature = normalized
     ### END YOUR CODE
     return feature
 
@@ -136,7 +164,24 @@ def match_descriptors(desc1, desc2, threshold=0.5):
     dists = cdist(desc1, desc2)
 
     ### YOUR CODE HERE
+    # For each descriptor in desc1, find the closest and second-closest in desc2
+    for i in range(M):
+        # Get distances from desc1[i] to all descriptors in desc2
+        distances = dists[i, :]
+        
+        # Sort to find closest and second-closest
+        sorted_indices = np.argsort(distances)
+        closest_idx = sorted_indices[0]
+        second_closest_idx = sorted_indices[1]
+        
+        closest_dist = distances[closest_idx]
+        second_closest_dist = distances[second_closest_idx]
+        
+        # Match if ratio is strictly smaller than threshold
+        if second_closest_dist > 0 and closest_dist / second_closest_dist < threshold:
+            matches.append([i, closest_idx])
     
+    matches = np.array(matches)
     ### END YOUR CODE
 
     return matches
@@ -242,12 +287,13 @@ def ransac(keypoints1, keypoints2, matches, n_iters=200, threshold=20):
     ### YOUR CODE HERE
     
     for i in range(n_iters):
-        inliersArr = np.zeros(N)
-        idx = np.random.choice(N, n_samples, replace=False)
-        p1 = matched1[idx, :]
-        p2 = matched2[idx, :]
+        # Use np.random.shuffle as specified in the comments
+        np.random.shuffle(matches)
+        samples = matches[:n_samples]
+        sample1 = pad(keypoints1[samples[:,0]])
+        sample2 = pad(keypoints2[samples[:,1]])
 
-        H, residuals, rank, s = np.linalg.lstsq(p2, p1, rcond=None)
+        H, residuals, rank, s = np.linalg.lstsq(sample2, sample1, rcond=None)
         H[:, 2] = np.array([0, 0, 1])
 
         output = np.dot(matched2, H)
@@ -255,7 +301,7 @@ def ransac(keypoints1, keypoints2, matches, n_iters=200, threshold=20):
         inliersCount = np.sum(inliersArr)
 
         if inliersCount > n_inliers:
-            max_inliers = inliersArr.copy() #还是注意深拷贝和浅拷贝啊
+            max_inliers = inliersArr.copy()
             n_inliers = inliersCount
 
     # 迭代完成，拿最大数目的匹配点对进行估计变换矩阵
@@ -312,7 +358,35 @@ def hog_descriptor(patch, pixels_per_cell=(8,8)):
 
     # Compute histogram per cell
     ### YOUR CODE HERE
+    for i in range(rows):
+        for j in range(cols):
+            # Get gradient magnitude and angle for this cell
+            G_cell = G_cells[i, j]
+            theta_cell = theta_cells[i, j]
+            
+            # Compute histogram for this cell
+            for bin_idx in range(n_bins):
+                # Bin range: [bin_idx * degrees_per_bin, (bin_idx + 1) * degrees_per_bin)
+                bin_start = bin_idx * degrees_per_bin
+                bin_end = (bin_idx + 1) * degrees_per_bin
+                
+                # Find pixels in this bin (handle wrap-around at 180 degrees)
+                if bin_idx == n_bins - 1:
+                    # Last bin includes 180 degrees
+                    mask = (theta_cell >= bin_start) & (theta_cell <= bin_end)
+                else:
+                    mask = (theta_cell >= bin_start) & (theta_cell < bin_end)
+                
+                # Sum gradient magnitudes in this bin
+                cells[i, j, bin_idx] = np.sum(G_cell[mask])
     
+    # Flatten block of histograms into 1D feature vector
+    block = cells.flatten()
+    
+    # Normalize by L2 norm
+    l2_norm = np.linalg.norm(block)
+    if l2_norm > 0:
+        block = block / l2_norm
     ### YOUR CODE HERE
 
     return block
